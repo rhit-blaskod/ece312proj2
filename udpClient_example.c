@@ -1,4 +1,7 @@
-/************* UDP CLIENT CODE *******************/
+// Partners: Tanner Staus, Deagan Blasko
+// Date modified: 2-14-2026
+// Title: udp client code
+
 
 #include <stdio.h>
 #include <sys/socket.h>
