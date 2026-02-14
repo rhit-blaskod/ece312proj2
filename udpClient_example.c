@@ -26,6 +26,7 @@
 
 
 #pragma pack(push, 1)
+//define structs for RHP header and RHMP header
 typedef struct {
     uint8_t version;
     uint16_t srcPort;
@@ -41,6 +42,7 @@ typedef struct {
 } RHMPHeader;
 #pragma pack(pop)
 
+// method for calculating checksum
 uint16_t calc_checksum(uint8_t *data, int len) {
     uint32_t sum = 0;
     for(int i = 0; i < len - 1; i += 2) {
@@ -61,12 +63,14 @@ uint16_t calc_checksum(uint8_t *data, int len) {
     return (uint16_t) (~sum);
 }
 
+// method to create rhp packet
 int create_rhp_control_packet(uint8_t *packet, const char *payload, uint16_t srcPort) {
     int payload_len = strlen(payload);
     int needs_padding = (payload_len % 2 == 1) ? 1 : 0;
     int packet_len = 7 + needs_padding + payload_len + 2;
     int offset = 0;
-
+    
+    // construct rhp
     memset(packet, 0, packet_len);
     packet[offset++] = RHP_VER;
     packet[offset++] = srcPort & 0xFF;
@@ -83,7 +87,8 @@ int create_rhp_control_packet(uint8_t *packet, const char *payload, uint16_t src
 
     memcpy(&packet[offset], payload, payload_len);
     offset += payload_len; 
-
+    
+    // calculate checksum as last step
     uint16_t checksum = calc_checksum(packet, offset);
     packet[offset++] = checksum & 0xFF;
     packet[offset++] = (checksum >> 8) & 0xFF;
@@ -91,13 +96,15 @@ int create_rhp_control_packet(uint8_t *packet, const char *payload, uint16_t src
     return packet_len;
 }
 
+// method to create rhmp packet
 int create_rhmp_packet(uint8_t *packet, uint8_t rhmp_type, uint8_t *rhmp_payload, 
                         uint16_t rhmp_payload_len, uint16_t srcPort) {
     int offset = 0;
     int rhmp_total_len = 4 + rhmp_payload_len;
     int needs_padding = (rhmp_total_len % 2 == 1) ? 1 : 0;
     int packet_len = 7 + needs_padding + rhmp_total_len + 2;
-
+    
+    // construct rhmp packet
     memset(packet, 0, packet_len);
     packet[offset++] = RHP_VER;
     packet[offset++] = srcPort & 0xFF;
@@ -121,7 +128,8 @@ int create_rhmp_packet(uint8_t *packet, uint8_t rhmp_type, uint8_t *rhmp_payload
         memcpy(&packet[offset], rhmp_payload, rhmp_payload_len);
         offset += rhmp_payload_len;
     }
-
+    
+    // calculate checksum as final step
     uint16_t checksum = calc_checksum(packet, offset);
     packet[offset++] = checksum & 0xFF;
     packet[offset++] = (checksum >> 8) & 0xFF;
@@ -129,11 +137,13 @@ int create_rhmp_packet(uint8_t *packet, uint8_t rhmp_type, uint8_t *rhmp_payload
     return packet_len;
 }
 
+// verify checksum using the existing calculate checksum method
 int verify_checksum(uint8_t *packet, int len) {
     uint16_t result = calc_checksum(packet, len);
     return (result == 0);
 }
 
+// method to parse response to sent rhp packet
 void parse_rhp_response(uint8_t *packet, int len, int message_num) {
     int offset = 0;
     uint8_t version = packet[offset++]; 
@@ -150,7 +160,8 @@ void parse_rhp_response(uint8_t *packet, int len, int message_num) {
     if(has_padding) {
         offset++;
     }
-
+    
+    // print out message metadata
     printf("\n========== Message %d Response ==========\n", message_num);
     printf("RHP Header:\n");
     printf("  Version: %u\n", version);
@@ -165,6 +176,7 @@ void parse_rhp_response(uint8_t *packet, int len, int message_num) {
     printf("  Communication ID: %u (0x%X)\n", srcPort, srcPort);
     printf("  Payload Length: %u\n", payload_len);
 
+    // print out payload if type RHP
     if(type == RHP_CONTROL_TYPE) {
             char payload[BUFSIZE] = {0};
         if(payload_len > 0 && offset + payload_len <= len - 2) {
@@ -173,7 +185,9 @@ void parse_rhp_response(uint8_t *packet, int len, int message_num) {
             printf("  Payload: \"%s\"\n", payload);
         }
         offset += payload_len;
-    } else if(type == RHP_RHMP_TYPE) {
+    }
+    // print out RHMP header and response
+    else if(type == RHP_RHMP_TYPE) {
         if(payload_len >= 4) {
             uint16_t commID = packet[offset] | ((packet[offset + 1] & 0x3F) << 8);
             uint16_t rhmp_type = ((packet[offset + 1] & 0xC0) >> 2) | ((packet[offset + 2] & 0xF0) >> 4);
@@ -208,6 +222,7 @@ void parse_rhp_response(uint8_t *packet, int len, int message_num) {
         }
     }
     
+    // verify checksum
     uint16_t checksum = packet[len - 2] | (packet[len - 1] << 8);
     int checksum_valid = verify_checksum(packet, len);
     printf("\nChecksum: 0x%04X\n", checksum);
@@ -226,20 +241,22 @@ int send_and_receive(int clientSocket, uint8_t *tx_buffer, int packet_len, uint8
     int valid_response = 0;
     int nBytes;
     printf("\n>>> Sending %s...\n", msg_description);
-
+    
+    // send message
     if(sendto(clientSocket, tx_buffer, packet_len, 0, (struct sockaddr *) serverAddr, 
                 sizeof(*serverAddr)) < 0) {
         perror("sendto failed");
         return 0;
     }
-
+    
+    // try to receive message
     while(retry_count < max_retries && !valid_response) {
         nBytes = recvfrom(clientSocket, rx_buffer, BUFSIZE, 0, NULL, NULL);
         if(nBytes < 0) {
             perror("recvfrom failed");
             break;
         }
-
+	// verify checksum
         if(verify_checksum(rx_buffer, nBytes)) {
             valid_response = 1;
             parse_rhp_response(rx_buffer, nBytes, msg_num);
@@ -309,19 +326,23 @@ int main() {
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(PORT);
     serverAddr.sin_addr.s_addr = inet_addr(SERVER);
-
+    
+    // 1. one RHP control message with string "hi" (odd len)
     int packet_len = create_rhp_control_packet(tx_buffer, "hi", SRC_PORT);
     send_and_receive(clientSocket, tx_buffer, packet_len, rx_buffer, &serverAddr, 
                     "RHP control message 'hi' (odd length)", 1);
-
+    
+    // 2. one RHP control message with the string "hello" (even len)
     packet_len = create_rhp_control_packet(tx_buffer, "hello", SRC_PORT);
     send_and_receive(clientSocket, tx_buffer, packet_len, rx_buffer, &serverAddr,
                      "RHP control message 'hello' (even length)", 2);
-
+    
+    // 3. one RHMP message of type Message_Request
     packet_len = create_rhmp_packet(tx_buffer, RHMP_MESSAGE_REQUEST, NULL, 0, SRC_PORT);
     send_and_receive(clientSocket, tx_buffer, packet_len, rx_buffer, &serverAddr,
                      "RHMP Message_Request", 3);
     
+    // 4. one RHMP message of type ID_Request
     packet_len = create_rhmp_packet(tx_buffer, RHMP_ID_REQUEST, NULL, 0, SRC_PORT);
     send_and_receive(clientSocket, tx_buffer, packet_len, rx_buffer, &serverAddr,
                      "RHMP ID_Request", 4);
